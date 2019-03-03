@@ -9,6 +9,8 @@ import serial
 import numpy as np
 import matplotlib.pyplot as plt
 import multiprocessing as mp
+import matplotlib
+import matplotlib.animation
 
 from google.cloud import bigtable
 from multiprocessing import Process, Queue
@@ -102,6 +104,26 @@ def get_data(sensortype):
 	return slist
 
 
+def plot_field():
+	"""
+	parallel process for plotting recent data
+	:return: None
+	"""
+	print("Plot Process started")
+	a = get_data('temp')
+	fig = plt.figure()
+	im = plt.imshow(a, interpolation="bilinear", cmap="plasma", vmin=30, vmax=90)
+	fig.colorbar(im)
+	plt.title("Temperature Field")
+
+	def update(t):
+		im.set_array(get_data('temp'))
+
+	ani = matplotlib.animation.FuncAnimation(fig, func=update, frames=4, repeat=False, interval=300)
+	plt.axis('off')
+	plt.show()
+
+
 if __name__ == "__main__":
 	# used between two processes ard to tuple and tuple to BT
 	tuple_queue = Queue()
@@ -112,15 +134,10 @@ if __name__ == "__main__":
 	bt_process = mp.Process(target = tuple_BT,args=(tuple_queue,))
 	bt_process.start()
 
-
-	for _ in range(4):
-		a = get_data('temp')
-		fig = plt.figure()
-		im = plt.imshow(a, interpolation="bilinear", cmap="plasma", vmin=30, vmax=90)
-		fig.colorbar(im)
-		plt.title("Temperature Field")
-		plt.show()
+	plot_process = mp.Process(target = plot_field)
+	plot_process.start()
 
 	ar_process.join()
 	bt_process.join()
+	plot_process.join()
 	print("All data pushed to cloud")

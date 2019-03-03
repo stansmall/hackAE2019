@@ -1,0 +1,15 @@
+{
+    "sourceFormat": "BIGTABLE",
+    "sourceUris": [
+        "https://googleapis.com/bigtable/projects/sensorray/instances/server/tables/data"
+    ],
+    "bigtableOptions": {
+        "readRowkeyAsString": "true",
+        "columnFamilies" : [
+            {
+              "familyId": "reading",
+              "type": "INTEGER",
+            }
+        ]
+    }
+}

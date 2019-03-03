@@ -1,110 +1,126 @@
-#!/usr/bin/env python
-
-# Copyright 2016 Google Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Demonstrates how to connect to Cloud Bigtable and run some basic operations.
-
-Prerequisites:
-
-- Create a Cloud Bigtable cluster.
-  https://cloud.google.com/bigtable/docs/creating-cluster
-- Set your Google Application Default Credentials.
-  https://developers.google.com/identity/protocols/application-default-credentials
+"""
+Copyright: RAM Thubati
+Date: 03/03/2019
 """
 
-import argparse
-# [START dependencies]
+import time
 import datetime
+import serial
+import numpy as np
+import matplotlib.pyplot as plt
+import multiprocessing as mp
 
+from google.cloud import bigtable
+from multiprocessing import Process, Queue
 from google.cloud import bigtable
 from google.cloud.bigtable import column_family
 from google.cloud.bigtable import row_filters
-# [END dependencies]
 
-def main(project_id, instance_id, table_id):
-    # [START connecting_to_bigtable]
-    # The client must be created with admin=True because it will create a
-    # table.
-    client = bigtable.Client(project=project_id, admin=True)
-    instance = client.instance(instance_id)
-    # [END connecting_to_bigtable]
 
-    # [START creating_a_table]
-    print('Creating the {} table.'.format(table_id))
-    table = instance.table(table_id)
+def ard_tuple(tuple_queue):
+	"""
+	will read serial data from arduino and then push them to
+	tuple_queue for another parallel process to push it to cloud.
+	:param tuple_queue:
+	:return: None.
+	"""
+	print("Getting data from Arduino..")
+	ser = serial.Serial("/dev/cu.usbmodem14201", 9600)
+	for i in range(1000):
+		data = ser.readline()
+		data = data.decode("utf-8").strip("\n")
+		temp_tuple = data.split("\t")
+		temp_tuple = list(temp_tuple)
+		#add timestamp to the tuple as well
+		timestamp = datetime.datetime.utcnow()
+		temp_tuple.append(timestamp)
+		temp_tuple = tuple(temp_tuple)
+		tuple_queue.put(temp_tuple)
 
-    print('Creating column family cf1 with Max Version GC rule...')
-    # Create a column family with GC policy : most recent N versions
-    # Define the GC policy to retain only the most recent 2 versions
-    max_versions_rule = column_family.MaxVersionsGCRule(2)
-    column_family_id = 'cf1'
-    column_families = {column_family_id: max_versions_rule}
-    if not table.exists():
-        table.create(column_families=column_families)
-    else:
-        print("Table {} already exists.".format(table_id))
-    # [END creating_a_table]
+	ser.close()
+	print("All data pushed to tuple_queue, exiting ard_read process")
 
-    # [START writing_rows]
-    print('Writing some greetings to the table.')
-    greetings = ['Hello World!', 'Hello Cloud Bigtable!', 'Hello Python!']
-    rows = []
-    column = 'greeting'.encode()
-    for i, value in enumerate(greetings):
-        # Note: This example uses sequential numeric IDs for simplicity,
-        # but this can result in poor performance in a production
-        # application.  Since rows are stored in sorted order by key,
-        # sequential keys can result in poor distribution of operations
-        # across nodes.
-        #
-        # For more information about how to design a Bigtable schema for
-        # the best performance, see the documentation:
-        #
-        #     https://cloud.google.com/bigtable/docs/schema-design
-        row_key = 'podID'.encode()
-        row = table.row(row_key)
-        row.set_cell(column_family_id,
-                     column,
-                     value,
-                     timestamp=datetime.datetime.utcnow())
-        rows.append(row)
-    table.mutate_rows(rows)
-    # [END writing_rows]
 
-    # [START creating_a_filter]
-    # Create a filter to only retrieve the most recent version of the cell
-    # for each column accross entire row.
-    row_filter = row_filters.CellsColumnLimitFilter(1)
-    # [END creating_a_filter]
+def tuple_BT(tuple_queue):
+	"""
+	Will run in parallel to ard_tuple. will watch the tuple_queue for new data
+	and incoming data will be pushed to cloud Big Table.
+	:param tuple_queue: shared queue with ard_tuple process
+	:return: None
+	"""
+	# configure the connection to BigTable
+	print("Pushing data to Big Table")
+	client = bigtable.Client(project='sensorray', admin=True)
+	instance = client.instance('instance')
+	table = instance.table('table')
+	for batch in range(4):
+		for i in range(10):
+			for j in range(25):
+				podID = str(i).zfill(2) + str(j).zfill(2)
+				id = podID
 
-    # [START getting_a_row]
-    print('Getting a single greeting by row key.')
-    key = 'greeting0'.encode()
+				# read the data from queue
+				temp,light,hum,moisture,timestamp = tuple_queue.get()
+				data = {
+					'temp': temp,
+					'light' :light,
+					'humidity': hum,
+					'moisture'  : moisture
+				}
 
-    row = table.read_row(key, row_filter)
-    cell = row.cells[column_family_id][column][0]
-    print(cell.value.decode('utf-8'))
-    # [END getting_a_row]
+				# write the data
+				rows = []
+				for key, value in data.items():
+					row = table.row(id)
+					row.set_cell('sensor',key,int(value),timestamp)
+					rows.append(row)
+				table.mutate_rows(rows)
+		print("Pushed batch "+str(batch)+" to Big Table")
 
-    # [START scanning_all_rows]
-    print('Scanning for all greetings:')
-    partial_rows = table.read_rows(filter_=row_filter)
 
-    for row in partial_rows:
-        cell = row.cells[column_family_id][column][0]
-        print(cell.value.decode('utf-8'))
-    # [END scanning_all_rows]
+def get_data(sensortype):
+	"""
+	retreive sensor data from cloud BigTable
+	:param sensortype: filter for the kind of sensordata
+	:return: np 2d array of sensordata.
+	"""
+	client = bigtable.Client(project='sensorray', admin=True)
+	instance = client.instance('instance')
+	table = instance.table('table')
 
-main("sensorray", "instance", "table")
+	row_filter = row_filters.CellsColumnLimitFilter(1)
+	print("Getting 250 most recent records for "+sensortype)
+	slist = []
+	for i in range(0,10):
+		for j in range(0,25):
+			pod = str(i).zfill(2) + str(j).zfill(2)
+			key = pod.encode()
+			row = table.read_row(key, row_filter)
+			cell = row.cells['sensor'][sensortype.encode()][0]
+			slist.append(int.from_bytes(cell.value, 'big'))
+	slist = np.array(slist).reshape(10,25)
+	return slist
+
+
+if __name__ == "__main__":
+	# used between two processes ard to tuple and tuple to BT
+	tuple_queue = Queue()
+	ar_process = mp.Process(target=ard_tuple,args=(tuple_queue,))
+	ar_process.start()
+
+	time.sleep(1)
+	bt_process = mp.Process(target = tuple_BT,args=(tuple_queue,))
+	bt_process.start()
+
+
+	for _ in range(4):
+		a = get_data('temp')
+		fig = plt.figure()
+		im = plt.imshow(a, interpolation="bilinear", cmap="plasma", vmin=30, vmax=90)
+		fig.colorbar(im)
+		plt.title("Temperature Field")
+		plt.show()
+
+	ar_process.join()
+	bt_process.join()
+	print("All data pushed to cloud")

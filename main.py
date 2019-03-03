@@ -73,7 +73,7 @@ def main(project_id, instance_id, table_id):
         # the best performance, see the documentation:
         #
         #     https://cloud.google.com/bigtable/docs/schema-design
-        row_key = 'greeting{}'.format(i).encode()
+        row_key = 'podID'.encode()
         row = table.row(row_key)
         row.set_cell(column_family_id,
                      column,
@@ -106,11 +106,5 @@ def main(project_id, instance_id, table_id):
         cell = row.cells[column_family_id][column][0]
         print(cell.value.decode('utf-8'))
     # [END scanning_all_rows]
-
-    # [START deleting_a_table]
-    print('Deleting the {} table.'.format(table_id))
-    table.delete()
-    # [END deleting_a_table]
-
 
 main("sensorray", "instance", "table")

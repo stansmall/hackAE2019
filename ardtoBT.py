@@ -4,12 +4,17 @@ import datetime
 import serial
 from google.cloud import bigtable
 from multiprocessing import Process, Queue
+from google.cloud import bigtable
+from google.cloud.bigtable import column_family
+from google.cloud.bigtable import row_filters
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 def ard_tuple(tuple_queue):
 	print("Getting data from Arduino")
-	ser = serial.Serial("COM10", 9600)
-	for i in range(25000):
+	ser = serial.Serial("/dev/cu.usbmodem14201", 9600)
+	for i in range(500):
 		data = ser.readline()
 		data = data.decode("utf-8").strip("\n")
 		temp_tuple = data.split("\t")
@@ -26,10 +31,11 @@ def ard_tuple(tuple_queue):
 def tuple_BT(tuple_queue):
 
 	# configure the connection to bigtable
+	print("pushing to BT")
 	client = bigtable.Client(project='sensorray', admin=True)
 	instance = client.instance('instance')
 	table = instance.table('table')
-	for _ in range(100):
+	for _ in range(2):
 		for i in range(10):
 			for j in range(25):
 				podID = str(i).zfill(2) + str(j).zfill(2)
@@ -53,7 +59,25 @@ def tuple_BT(tuple_queue):
 					rows.append(row)
 
 				table.mutate_rows(rows)
+				print("pushed "+podID+" to BT")
 
+def get_data(sensortype):
+    client = bigtable.Client(project='sensorray', admin=True)
+    instance = client.instance('instance')
+    table = instance.table('table')
+
+    row_filter = row_filters.CellsColumnLimitFilter(1)
+    print("Getting 250 most recent records for "+sensortype)
+    slist = []
+    for i in range(0,10):
+        for j in range(0,25):
+            pod = str(i).zfill(2) + str(j).zfill(2)
+            key = pod.encode()
+            row = table.read_row(key, row_filter)
+            cell = row.cells['sensor'][sensortype.encode()][0]
+            slist.append(int.from_bytes(cell.value, 'big'))
+    slist = np.array(slist).reshape(10,25)
+    return slist
 
 if __name__ == "__main__":
 	# used between two processes ard to tuple and tuple to BT
@@ -61,12 +85,12 @@ if __name__ == "__main__":
 	ar_process = mp.Process(target=ard_tuple,args=(tuple_queue,))
 	ar_process.start()
 
-	time.sleep(5)
+	time.sleep(1)
 	bt_process = mp.Process(target = tuple_BT,args=(tuple_queue,))
 	bt_process.start()
+
+
 
 	ar_process.join()
 	bt_process.join()
 	print("All data pushed to cloud")
-
-

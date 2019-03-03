@@ -10,7 +10,7 @@ table = instance.table('table')
 timestamp=datetime.datetime.utcnow()
 
 # read the data in from arduino
-id = 'podID'
+id = '0000'
 data = {
     'water':500,
     'humidity':600,
@@ -18,10 +18,11 @@ data = {
 }
 
 # write the data
+row_key = id.encode()
 rows = []
 
 for key, value in data.items():
-    row = table.row(id)
+    row = table.row(row_key)
     row.set_cell(   'sensor',
                     key,
                     int(value),
